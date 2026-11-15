@@ -67,3 +67,23 @@ $('upload-form').addEventListener('submit', e => {e.preventDefault(); run(async 
   if(error) throw error;
   $('upload-form').reset(); await listFiles(); message('Document uploaded to your private folder.');
 });});
+const testButton = document.createElement('button');
+testButton.textContent = 'Test access to Account A’s file';
+testButton.className = 'secondary';
+$('workspace').append(testButton);
+
+testButton.addEventListener('click', () => run(async () => {
+  const path =
+    '2e03935d-1c07-4852-85d3-ae2827dbdec4/' +
+    'cb1e74f0-7a69-41a2-9c7f-062e6d4174e0_Eni_O__Resume_SOC.pdf';
+
+  const { data, error } = await client.storage
+    .from('documents')
+    .download(path);
+
+  if (error) {
+    message(`No file returned: ${error.message}`);
+  } else if (data) {
+    message('File access succeeded for the signed-in account.');
+  }
+}));
