@@ -1,89 +1,39 @@
-import { createClient } from '@supabase/supabase-js';
-import { validateFile, objectPath } from './security.js';
+import {createClient} from '@supabase/supabase-js';
+import {validateFile,objectPath,displayName,cleanName,extension,TYPES,formatBytes,makeToken,hashToken} from './security.js';
 import './style.css';
-const $ = id => document.getElementById(id);
-const message = text => { $('status').textContent = text; };
-const url = import.meta.env.VITE_SUPABASE_URL;
-const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-let client, user;
-function credentials() { return {email: $('email').value.trim(), password: $('password').value}; }
-async function run(action) {
-  const buttons = [...document.querySelectorAll('button')];
-  buttons.forEach(b => b.disabled = true);
-  try { await action(); } catch (error) { message(error.message || 'Request failed. Try again.'); }
-  finally { buttons.forEach(b => b.disabled = !client); }
-}
-async function listFiles() {
-  $('files').replaceChildren();
-  const {data, error} = await client.storage.from('documents').list(user.id, {limit:100, sortBy:{column:'created_at',order:'desc'}});
-  if (error) throw error;
-  if (!data.length) { const item = document.createElement('li'); item.textContent = 'Your vault is empty. Upload your first sample document.'; $('files').append(item); }
-  for (const file of data) {
-    const item = document.createElement('li');
-    const name = document.createElement('span'); name.textContent = file.name.slice(37);
-    const button = document.createElement('button'); button.className = 'secondary'; button.textContent = 'Download';
-    button.addEventListener('click', () => run(async () => {
-      const {data, error} = await client.storage.from('documents').download(`${user.id}/${file.name}`);
-      if (error) throw error;
-      const href = URL.createObjectURL(data); const a = document.createElement('a');
-      a.href = href; a.download = file.name.slice(37); a.click();
-      setTimeout(() => URL.revokeObjectURL(href), 30000);
-      message('Download authorized.');
-    }));
-    item.append(name,button); $('files').append(item);
-  }
-}
-async function updateSession(session) {
-  user = session?.user;
-  $('auth-panel').hidden = !!user; $('workspace').hidden = !user;
-  $('files').replaceChildren(); $('password').value = '';
-  if (user) { $('identity').textContent = user.email; await listFiles(); }
-}
-if (!url || !key || url.includes('YOUR_PROJECT') || key.includes('REPLACE_ME')) {
-  message('Setup needed: connect your Supabase project using the README. Sign-in and uploads are unavailable until then.');
-  document.querySelectorAll('button').forEach(b => b.disabled = true);
-} else {
-  client = createClient(url, key, {auth:{persistSession:false, detectSessionInUrl:false}});
-  client.auth.onAuthStateChange((_event,session) => { setTimeout(() => run(() => updateSession(session)), 0); });
-}
-$('auth-form').addEventListener('submit', e => {e.preventDefault(); run(async () => {
-  const {error} = await client.auth.signInWithPassword(credentials());
-  if (error) throw new Error('Sign-in failed. Check your credentials and email confirmation.');
-  message('Signed in.');
-});});
-$('signup').addEventListener('click', () => { if (!$('auth-form').reportValidity()) return; run(async () => {
-  const {data,error} = await client.auth.signUp(credentials()); if(error) throw error;
-  message(data.session ? 'Account created.' : 'Check your email for a confirmation link, then return here to sign in.');
-});});
-$('signout').addEventListener('click', () => run(async () => {
-  const {error} = await client.auth.signOut(); if(error) throw error;
-  await updateSession(null); message('Signed out.');
-}));
-$('refresh').addEventListener('click', () => run(listFiles));
-$('upload-form').addEventListener('submit', e => {e.preventDefault(); run(async () => {
-  const file = $('file').files[0]; validateFile(file);
-  const path = objectPath(user.id,file.name,crypto.randomUUID());
-  const {error} = await client.storage.from('documents').upload(path,file,{upsert:false,contentType:file.type});
-  if(error) throw error;
-  $('upload-form').reset(); await listFiles(); message('Document uploaded to your private folder.');
-});});
-const testButton = document.createElement('button');
-testButton.textContent = 'Test access to Account A’s file';
-testButton.className = 'secondary';
-$('workspace').append(testButton);
-
-testButton.addEventListener('click', () => run(async () => {
-  const path =
-    '2e03935d-1c07-4852-85d3-ae2827dbdec4/' +
-    'cb1e74f0-7a69-41a2-9c7f-062e6d4174e0_Eni_O__Resume_SOC.pdf';
-
-  const { data, error } = await client.storage
-    .from('documents')
-    .download(path);
-
-  if (error) {
-    message(`No file returned: ${error.message}`);
-  } else if (data) {
-    message('File access succeeded for the signed-in account.');
-  }
-}));
+const $=id=>document.getElementById(id);
+const say=text=>{$('status').textContent=text;};
+let client,user,files=[],shares=[],view='files',busy=false,dialogAction;
+const url=import.meta.env.VITE_SUPABASE_URL,key=import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const sharedToken=new URLSearchParams(location.hash.slice(1)).get('share');
+function el(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
+async function run(action){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);try{await action();}catch(e){say(e.message||'Something went wrong. Please try again.');}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);if(!client&&!sharedToken)document.querySelectorAll('button').forEach(b=>b.disabled=true);}}
+function check(error){if(error)throw error;}
+function setView(next){view=next;$('files-view').hidden=next!=='files';$('shares-view').hidden=next!=='shares';$('nav-files').classList.toggle('active',next==='files');$('nav-shares').classList.toggle('active',next==='shares');$('breadcrumb').textContent=next==='files'?'My files':'Shared by me';$('view-title').replaceChildren(document.createTextNode(next==='files'?'My files':'Shared by me'),el('span','pink-dot','.'));$('view-description').textContent=next==='files'?'Your notes, plans, and all the in-between.':'A little piece of your Pouch, sent out into the world.';$('upload-button').hidden=next!=='files';}
+function date(value){return new Date(value).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
+function empty(parent,title,description){const card=el('div','empty');card.append(el('span','','✿'),el('h3','',title),el('p','',description));parent.append(card);}
+function downloadBlob(blob,name){const href=URL.createObjectURL(blob),a=el('a');a.href=href;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(href),30000);}
+function button(text,action,cls=''){const b=el('button',cls,text);b.type='button';b.addEventListener('click',()=>run(action));return b;}
+function openDialog(title,description,content,submit,action){$('dialog-title').textContent=title;$('dialog-description').textContent=description;$('dialog-content').replaceChildren(...content);$('dialog-submit').textContent=submit;dialogAction=action;$('action-dialog').showModal();}
+$('dialog-close').onclick=()=>$('action-dialog').close();
+$('dialog-form').onsubmit=e=>{e.preventDefault();run(async()=>{await dialogAction();});};
+async function listFiles(){let result=[],offset=0;for(;;){const {data,error}=await client.storage.from('documents').list(user.id,{limit:100,offset,sortBy:{column:'created_at',order:'desc'}});check(error);result.push(...data.filter(f=>f.id));if(data.length<100)break;offset+=100;}files=result;$('file-count').textContent=files.length;$('nav-count').textContent=files.length;$('storage-size').textContent=formatBytes(files.reduce((n,f)=>n+Number(f.metadata?.size||0),0));renderFiles();}
+async function listShares(){const {data,error}=await client.from('pouch_shares').select('id,object_path,file_name,expires_at,revoked_at,created_at').order('created_at',{ascending:false});if(error){shares=[];$('share-count').textContent='—';$('shares').replaceChildren();empty($('shares'),'Sharing needs one more step','Apply the Pouch migration in Supabase and configure the Pages Function secrets.');return;}shares=data;$('share-count').textContent=data.filter(s=>!s.revoked_at&&Date.parse(s.expires_at)>Date.now()).length;renderShares();}
+async function refresh(){await listFiles();await listShares();}
+function renderFiles(){const q=$('search').value.toLowerCase(),sort=$('sort').value;const visible=files.filter(f=>displayName(f.name).toLowerCase().includes(q));visible.sort((a,b)=>sort==='name'?displayName(a.name).localeCompare(displayName(b.name)):sort==='size'?Number(b.metadata?.size||0)-Number(a.metadata?.size||0):Date.parse(b.created_at)-Date.parse(a.created_at));$('files').replaceChildren();$('result-count').textContent=`(${visible.length})`;if(!visible.length){empty($('files'),q?'Nothing tucked away under that name.':'Your Pouch is ready.','Upload a file to give it a little home here.');return;}for(const file of visible){const name=displayName(file.name),ext=extension(name),kind=['png','jpg','jpeg','webp'].includes(ext)?'image':['xlsx','csv'].includes(ext)?'sheet':ext==='zip'?'archive':'';const card=el('article','file-card'),preview=el('div',`file-preview ${kind}`);preview.append(el('span',`file-glyph ${kind}`,ext.toUpperCase()),el('span','private-label','PRIVATE STORAGE'));const info=el('div','file-info');info.append(el('h3','',name),el('p','file-meta',`${formatBytes(Number(file.metadata?.size||0))} · ${date(file.created_at)}`));const actions=el('div','file-actions');actions.append(button('Download',async()=>{const {data,error}=await client.storage.from('documents').download(`${user.id}/${file.name}`);check(error);downloadBlob(data,name);say('Your file is ready.');}),button('Share ↗',()=>shareFile(file)),button('Rename',()=>renameFile(file)),button('Delete',()=>deleteFile(file),'danger'));info.append(actions);card.append(preview,info);$('files').append(card);}}
+function renderShares(){$('shares').replaceChildren();if(!shares.length){empty($('shares'),'Nothing shared just yet.','Choose Share on a file to create an expiring link.');return;}for(const share of shares){const active=!share.revoked_at&&Date.parse(share.expires_at)>Date.now(),row=el('article','share-row'),info=el('div');info.append(el('strong','',share.file_name),el('p','share-state',share.revoked_at?'Revoked':active?'Active link':'Expired'),el('small','',`Expires ${new Date(share.expires_at).toLocaleString()}`));row.append(info);if(active)row.append(button('Revoke link',async()=>{const {error}=await client.from('pouch_shares').update({revoked_at:new Date().toISOString()}).eq('id',share.id);check(error);await listShares();say('Link revoked. Future downloads through this link will be blocked.');},'secondary'));$('shares').append(row);}}
+function shareFile(file){const label=el('label','','Link expires in');label.htmlFor='expiry';const expiry=el('select','dialog-select');expiry.id='expiry';for(const [value,text] of [[1,'1 hour'],[24,'24 hours'],[168,'7 days']]){const o=el('option','',text);o.value=value;expiry.append(o);}expiry.value=24;openDialog('Share a little something.',`Anyone with this link can download ${displayName(file.name)}. They can forward it, too.`,[label,expiry],'Create sharing link',async()=>{const token=makeToken(),hash=await hashToken(token);const {error}=await client.from('pouch_shares').insert({owner_id:user.id,token_hash:hash,object_path:`${user.id}/${file.name}`,file_name:displayName(file.name),expires_at:new Date(Date.now()+Number(expiry.value)*3600000).toISOString()});check(error);const link=new URL('/',location.origin);link.hash=`share=${token}`;const input=el('input','link-result');input.value=link.href;input.readOnly=true;input.setAttribute('aria-label','Sharing link');const note=el('p','','Copy this link now. Pouch stores only its fingerprint, so the original link cannot be retrieved later. You can revoke it under Shared by me.');$('dialog-content').replaceChildren(input,note);$('dialog-title').textContent='A link, ready to go.';$('dialog-submit').textContent='Copy link';dialogAction=async()=>{try{await navigator.clipboard.writeText(link.href);say('Sharing link copied.');$('action-dialog').close();}catch{input.select();say('Select and copy the link above.');}};await listShares();input.select();});}
+async function revokeForPath(path){const {error}=await client.from('pouch_shares').update({revoked_at:new Date().toISOString()}).eq('object_path',path).is('revoked_at',null);check(error);}
+function renameFile(file){const input=el('input');input.value=displayName(file.name);input.required=true;input.maxLength=140;input.setAttribute('aria-label','New filename');openDialog('A fresh little name.', 'Renaming stops existing sharing links for this file. Keep the same file extension.',[input],'Rename file',async()=>{const name=cleanName(input.value);if(!name||extension(name)!==extension(file.name))throw new Error('Keep the original file extension.');if(name===displayName(file.name)){$('action-dialog').close();return;}const path=`${user.id}/${file.name}`;await revokeForPath(path);const {error}=await client.storage.from('documents').move(path,objectPath(user.id,name,crypto.randomUUID()));check(error);$('action-dialog').close();await refresh();say('File renamed. Previous sharing links are no longer active.');});}
+function deleteFile(file){openDialog('Let this one go?',`Delete ${displayName(file.name)}? This permanently removes the file and stops its sharing links.`,[],'Delete permanently',async()=>{const path=`${user.id}/${file.name}`;await revokeForPath(path);const {error}=await client.storage.from('documents').remove([path]);check(error);$('action-dialog').close();await refresh();say('File removed from your Pouch.');});}
+async function upload(selected){if(!user)throw new Error('Sign in first.');const batch=[...selected];if(!batch.length)return;let uploaded=0;for(const file of batch){const ext=validateFile(file);say(`Tucking away ${file.name}…`);const {error}=await client.storage.from('documents').upload(objectPath(user.id,file.name,crypto.randomUUID()),file,{upsert:false,contentType:TYPES[ext]});if(error){await refresh();throw new Error(`${uploaded} uploaded. ${file.name}: ${error.message}`);}uploaded++;}$('file-input').value='';await refresh();say(`${uploaded} ${uploaded===1?'file tucked':'files tucked'} away. All yours.`);}
+$('upload-button').onclick=()=>$('file-input').click();$('file-input').onchange=e=>run(()=>upload(e.target.files));const drop=$('dropzone');for(const type of ['dragover','dragenter'])drop.addEventListener(type,e=>{e.preventDefault();drop.classList.add('dragging');});for(const type of ['dragleave','drop'])drop.addEventListener(type,e=>{e.preventDefault();drop.classList.remove('dragging');});drop.addEventListener('drop',e=>run(()=>upload(e.dataTransfer.files)));
+$('search').oninput=renderFiles;$('sort').onchange=renderFiles;$('refresh').onclick=()=>run(refresh);$('nav-files').onclick=()=>{if(user)setView('files');};$('nav-shares').onclick=()=>{if(user)setView('shares');};
+async function sessionView(session){const next=session?.user||null;const changed=next?.id!==user?.id;user=next;$('auth-view').hidden=!!user;$('workspace').hidden=!user;$('signout').hidden=!user;$('account').textContent=user?.email||'Your personal file corner';$('password').value='';if(!user){files=[];shares=[];$('files').replaceChildren();$('shares').replaceChildren();$('nav-count').textContent='0';if($('action-dialog').open)$('action-dialog').close();}else if(changed){setView('files');await refresh();}}
+if(sharedToken){$('auth-view').hidden=true;$('shared-view').hidden=false;$('breadcrumb').textContent='Shared with you';$('shared-download').onclick=()=>run(async()=>{say('Checking your sharing link…');const response=await fetch(`/api/shared?token=${encodeURIComponent(sharedToken)}`,{cache:'no-store',credentials:'omit'});if(!response.ok){let body;try{body=await response.json();}catch{}throw new Error(body?.error||'This link is unavailable, expired, or revoked.');}const name=response.headers.get('X-Pouch-Filename')||'shared-file';downloadBlob(await response.blob(),name);say('Downloaded. Enjoy your little delivery.');});}
+else if(!url||!key||url.includes('YOUR_PROJECT')||key.includes('REPLACE_ME')){say('Your Pouch needs connecting. Add the Supabase project URL and publishable key in Cloudflare, then rebuild.');document.querySelectorAll('button').forEach(b=>b.disabled=true);}
+else{client=createClient(url,key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});client.auth.onAuthStateChange((_event,session)=>{setTimeout(()=>{if(busy){setTimeout(()=>sessionView(session).catch(e=>say(e.message)),100);}else run(()=>sessionView(session));},0);});}
+const credentials=()=>({email:$('email').value.trim(),password:$('password').value});
+$('auth-form').onsubmit=e=>{e.preventDefault();run(async()=>{const {data,error}=await client.auth.signInWithPassword(credentials());if(error)throw new Error('Sign-in failed. Check your password and email confirmation.');await sessionView(data.session);say('Welcome back. Your Pouch missed you.');});};
+$('signup').onclick=()=>{if(!$('auth-form').reportValidity())return;run(async()=>{const {data,error}=await client.auth.signUp(credentials());check(error);if(data.session)await sessionView(data.session);say(data.session?'Your Pouch is ready.':'Check your email to confirm your account, then come back and sign in.');});};
+$('signout').onclick=()=>run(async()=>{const {error}=await client.auth.signOut();check(error);await sessionView(null);say('Signed out. See you soon.');});

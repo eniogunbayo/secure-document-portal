@@ -1,70 +1,50 @@
-# Secure Document Portal
+# Pouch ♡
 
-A cybersecurity portfolio lab by Eni Ogunbayo. Users sign in, upload sample PDF/TXT documents, and download their own files. The purpose is to demonstrate identity, least privilege, private storage, and security validation.
+A pastel pink home for your files. Built by Eni Ogunbayo as a functional cybersecurity portfolio project.
 
-**Status:** Initial implementation; not connected to a live Supabase project or deployed. Cross-user isolation is NOT yet verified. Do not describe the project as deployed or security-tested on a resume yet.
+## What you can do
 
-## Architecture
+- Create an account and return to your persistent personal file workspace.
+- Upload multiple files or drag and drop; search and sort your files.
+- Download, rename, and permanently delete your own files.
+- Generate bearer sharing links that expire after 1 hour, 24 hours, or 7 days.
+- Review sharing links and revoke future downloads.
+- Open a sharing link without creating an account.
 
-The browser runs a Vite/JavaScript app hosted on Cloudflare Pages. Supabase Auth issues user sessions. Supabase Storage checks the authenticated user against Postgres row-level security (RLS) policies before listing, uploading, or downloading objects. Files are stored under `<user UUID>/<random UUID>_<sanitized filename>` in a private bucket. The folder prefix is checked on the server, not just in the page.
+**Deployment status:** Upgrade implementation prepared locally. The previous portal is live, but this Pouch upgrade requires the SQL migration, Cloudflare runtime variables, file upload, and live verification described below. Automated tests use mocked provider responses; they do not establish live RLS correctness.
 
-## Step 1: Create the backend
+## Start here
 
-1. Create a Free project at https://supabase.com/dashboard in a new organization on the Free plan. Keep your database password private.
-2. Open SQL Editor, paste `supabase/setup.sql`, and run it **once** in this new project. It creates the private bucket and two owner-folder policies. Do not add permissive storage policies.
-3. In Authentication settings, require email confirmation and a minimum password length of 12. These are backend settings; the HTML minimum alone is not a security boundary.
-4. Set Site URL to your eventual HTTPS site URL. For local tests, use `http://localhost:5173`. Confirmation links return users to the page; they then sign in with their password.
-5. Find the project URL and **publishable** API key in project settings. These are intended for browser use. Never put a secret/service-role key, database password, or access token in the app, repository, or chat.
-
-## Step 2: Run locally
-
-Install Node.js 22 or newer, then run:
+For the existing portal, follow **[Pouch setup](docs/POUCH_SETUP.md)**. Keep existing accounts and files. Run only the upgrade SQL after the original setup. For a brand-new dedicated backend, run `supabase/setup.sql` first and `supabase/pouch-upgrade.sql` second.
 
 ```sh
 npm ci
 cp .env.example .env
-```
-
-Edit `.env` with the project URL and publishable key. Then:
-
-```sh
+# Fill in only your project URL and public publishable key.
 npm run dev
 ```
 
-Visit the displayed local URL. Create a test account and confirm its email. Use dummy files only. Sessions are kept in memory, so refreshing the page requires signing in again.
+Frontend build: `npm run build` → `dist`. Production host: Cloudflare Pages with Git integration. The root `functions/` directory supplies the sharing server independently of Vite. Do not move it into `src` or `dist`.
 
-## Step 3: Deploy free on Cloudflare Pages
+## Architecture
 
-1. Create a Cloudflare account and open Workers & Pages. Choose a **Pages** project and connect this GitHub repository.
-2. Build command: `npm run build`. Output directory: `dist`.
-3. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` as build environment variables. Their values are compiled into the public browser bundle by design.
-4. Deploy and update the Supabase Authentication Site URL to the returned HTTPS address. No custom domain is necessary.
-5. Confirm response headers from `public/_headers` are present on the deployed site. These headers are specific to Cloudflare Pages; another host needs equivalent configuration.
-6. Run every test in `docs/SECURITY_TEST_PLAN.md` and record results before linking the site on your resume.
+Browser → Supabase Auth/Storage with authenticated owner-folder RLS for file operations. Sharing creation and revocation use an owner-restricted Postgres table. A recipient opens `/#share=<random token>` and requests `/api/shared`. The Pages Function hashes the token, checks the sharing row, then retrieves and streams only the authorized object using a server-only credential. Raw tokens are not stored in the sharing table. Each new link has 256 bits of random entropy. Token-bearing download requests may still appear in infrastructure request logs; do not log them or expose logs publicly.
 
-Stay on Free plans and monitor usage. Free-plan limits and service inactivity policies can change. This project is a small demonstration, not a production document service.
+## Security boundaries
 
-## Local checks
+- Private storage; file ownership enforced by backend RLS, not interface filtering.
+- Owner-only file update/delete; shared recipients receive download access only.
+- Owners cannot choose another owner's path when creating a link. Only `revoked_at` is updatable in sharing records, and revoked links cannot be reactivated.
+- Sharing checks every new request; no public bucket or reusable signed storage URLs.
+- Link files are streamed as attachments with `no-store` and `nosniff` headers.
+- Dynamic filenames rendered as text; no third-party fonts, analytics, or scripts.
+- CSP and browser restrictions applied by Cloudflare Pages headers; function replies set their own headers.
+- Persistent browser sessions improve usability but make XSS prevention and shared-device sign-out important.
 
-```sh
-npm test
-npm run build
-```
+## Limits
 
-Unit tests cover client file validation and path handling. They do **not** prove backend authorization or malicious-file detection.
+5 MB per file. Supported: PDF, TXT, PNG, JPG, WEBP, DOCX, XLSX, PPTX, CSV, ZIP. Type restrictions check declared MIME values and client extensions, not actual file contents or malware. Total storage follows your backend plan; the displayed usage is the user's stored bytes, not a quota gauge. Pouch sharing links are bearer credentials and can be forwarded. Revocation cannot recall downloaded or in-progress content. Rename revokes existing links rather than preserving them. File changes and share revocation are separate calls: revocation runs first, so a later failed rename/delete can leave the file intact with its links already revoked. No folders, collaborative editing, trash recovery, password reset, MFA, custom rate limiter, or full audit pipeline.
 
-## Security scope
+## Verification
 
-- Private bucket, authenticated owner-folder INSERT/SELECT policies.
-- No anonymous, update, or delete access granted by this schema.
-- 5 MB limit and PDF/TXT declared MIME restrictions at the storage bucket; additional client extension checks.
-- Authenticated downloads through the storage API; no public or signed sharing links.
-- Session tokens stay in memory; no passwords or tokens logged by app code.
-- Dynamic filenames displayed with `textContent`; no HTML interpolation.
-- Restrictive browser headers for Cloudflare Pages.
-
-## Limitations and next steps
-
-MIME types can be forged; these checks are not malware scanning. No antivirus, admin role, MFA, application rate limiter, alerting, password recovery flow, or durable application audit trail is implemented. Supabase platform auth/storage logs are separate from an application audit trail; configure and inspect those during live testing. Files are limited to the first 100 entries in this starter. Register two test users, disable new public signups after testing, and use screenshots/walkthroughs for recruiters. Review existing Supabase policies if modifying this schema. Never store personal or confidential files.
-
-References: https://supabase.com/docs/guides/storage/security/access-control · https://supabase.com/docs/guides/storage/buckets/fundamentals · https://supabase.com/docs/reference/javascript/auth-signinwithpassword
+`npm test` covers file validation, safe paths, sharing tokens, and mocked sharing server behavior (active/revoked/expired/missing/invalid links and provider errors). `npm run build` validates the frontend bundle. Complete [live security checks](docs/SECURITY_TEST_PLAN.md) before claiming these controls are verified in the hosted environment.
