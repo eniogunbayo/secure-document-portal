@@ -1,17 +1,15 @@
 # Pouch ♡
 
-A pastel pink home for your files. Built by Eni Ogunbayo as a functional cybersecurity portfolio project.
+A home for your files. Built by Eni Ogunbayo as a functional cybersecurity portfolio project.
 
 ## What you can do
 
 - Create an account and return to your persistent personal file workspace.
 - Upload multiple files or drag and drop; search and sort your files.
 - Download, rename, and permanently delete your own files.
-- Generate bearer sharing links that expire after 1 hour, 24 hours, or 7 days.
+- Generate sharing links that expire after 1 hour, 24 hours, or 7 days.
 - Review sharing links and revoke future downloads.
 - Open a sharing link without creating an account.
-
-**Deployment status:** Upgrade implementation prepared locally. The previous portal is live, but this Pouch upgrade requires the SQL migration, Cloudflare runtime variables, file upload, and live verification described below. Automated tests use mocked provider responses; they do not establish live RLS correctness.
 
 ## Start here
 
